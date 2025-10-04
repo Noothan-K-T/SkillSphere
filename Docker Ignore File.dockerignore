@@ -1,0 +1,15 @@
+Ignore the virtual environment
+.venv
+
+Ignore Python cache files
+pycache/
+*.pyc
+*.pyo
+*.pyd
+
+Ignore IDE/editor configuration files
+.vscode/
+.idea/
+
+Ignore the .env file (secrets should be passed in securely, not built into the image)
+.env
