@@ -6,7 +6,7 @@ SkillSphere is a full-stack web application that acts as a personal AI career co
 This project was built from the ground up, integrating a modern frontend, a powerful backend API, multiple databases, and cutting-edge AI models to provide real, actionable career advice.
 
 ✨ Key Features
-Secure User Authentication: Users can create an account, log in, and have their sessions securely managed using JWT tokens.
+Secure User Authentication: Users  can create an account, log in, and have their sessions securely managed using JWT tokens.
 
 AI-Powered Resume Parser: Leverages Google's Gemini AI to intelligently parse resume text, extracting and categorizing skills, work experience, and education.
 
