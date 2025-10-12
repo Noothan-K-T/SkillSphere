@@ -84,8 +84,8 @@ const RoadmapGenerator = ({ token, parsedData }) => {
         }
     }, [parsedData]);
 
-    const handleGenerate = async (e) => { e.preventDefault(); setError(''); setRoadmap(null); setIsLoading(true); setSaveButtonText('Save Roadmap'); const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : []; try { const response = await fetch('http://127.0.0.1:8000/generate-roadmap', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ current_role: currentRole, desired_role: desiredRole, current_skills: currentSkills }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to generate roadmap.'); setRoadmap(data.roadmap); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
-    const handleSaveRoadmap = async () => { if (!roadmap) return; setSaveButtonText('Saving...'); const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : []; const roadmapData = { current_role: currentRole, desired_role: desiredRole, current_skills: currentSkills }; const roadmapResponse = { roadmap: roadmap }; try { const response = await fetch('http://127.0.0.1:8000/roadmaps', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ roadmap_data: roadmapData, roadmap_response: roadmapResponse }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to save roadmap.'); setSaveButtonText('Saved!'); } catch (err) { setError(err.message); setSaveButtonText('Save Roadmap'); } };
+    const handleGenerate = async (e) => { e.preventDefault(); setError(''); setRoadmap(null); setIsLoading(true); setSaveButtonText('Save Roadmap'); const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : []; try { const response = await fetch('http://127.0.0.1:8001/generate-roadmap', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ current_role: currentRole, desired_role: desiredRole, current_skills: currentSkills }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to generate roadmap.'); setRoadmap(data.roadmap); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
+    const handleSaveRoadmap = async () => { if (!roadmap) return; setSaveButtonText('Saving...'); const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : []; const roadmapData = { current_role: currentRole, desired_role: desiredRole, current_skills: currentSkills }; const roadmapResponse = { roadmap: roadmap }; try { const response = await fetch('http://127.0.0.1:8001/roadmaps', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ roadmap_data: roadmapData, roadmap_response: roadmapResponse }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to save roadmap.'); setSaveButtonText('Saved!'); } catch (err) { setError(err.message); setSaveButtonText('Save Roadmap'); } };
 
     return (
         <Card>
@@ -145,7 +145,7 @@ const MyRoadmapsPage = ({ token }) => {
     useEffect(() => {
         const fetchRoadmaps = async () => {
             try {
-                const response = await fetch('http://127.0.0.1:8000/my-roadmaps', { headers: { 'Authorization': `Bearer ${token}` } });
+                const response = await fetch('http://127.0.0.1:8001/my-roadmaps', { headers: { 'Authorization': `Bearer ${token}` } });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || 'Failed to fetch roadmaps.');
                 setSavedRoadmaps(data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
@@ -162,7 +162,7 @@ const MyRoadmapsPage = ({ token }) => {
         if (!roadmapId) return; // Prevent sending 'undefined'
         setSavedRoadmaps(currentRoadmaps => currentRoadmaps.filter(r => (r.id || r._id) !== roadmapId));
         try {
-            const response = await fetch(`http://127.0.0.1:8000/roadmaps/${roadmapId}`, {
+            const response = await fetch(`http://127.0.0.1:8001/roadmaps/${roadmapId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -244,7 +244,7 @@ const ResumeParser = ({ token, setParsedData, setPage }) => {
         setError('');
         setLocalParsedData(null);
         try {
-            const response = await fetch('http://127.0.0.1:8000/parse-resume', {
+            const response = await fetch('http://127.0.0.1:8001/parse-resume', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ resume_text: resumeText })
@@ -322,7 +322,7 @@ const LoginPage = ({ setPage, setToken }) => {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleLogin = async (e) => { e.preventDefault(); setError(''); setIsLoading(true); try { const response = await fetch('http://127.0.0.1:8000/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to login'); setToken(data.access_token); localStorage.setItem('skillSphereToken', data.access_token); setPage('home'); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
+    const handleLogin = async (e) => { e.preventDefault(); setError(''); setIsLoading(true); try { const response = await fetch('http://127.0.0.1:8001/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to login'); setToken(data.access_token); localStorage.setItem('skillSphereToken', data.access_token); setPage('home'); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
 
     return (
         <AuthCard title="Welcome Back!">
@@ -355,7 +355,7 @@ const RegisterPage = ({ setPage }) => {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleRegister = async (e) => { e.preventDefault(); setError(''); setMessage(''); setIsLoading(true); try { const response = await fetch('http://127.0.0.1:8000/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to register'); setMessage('Registration successful! Please log in.'); setEmail(''); setPassword(''); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
+    const handleRegister = async (e) => { e.preventDefault(); setError(''); setMessage(''); setIsLoading(true); try { const response = await fetch('http://127.0.0.1:8001/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Failed to register'); setMessage('Registration successful! Please log in.'); setEmail(''); setPassword(''); } catch (err) { setError(err.message); } finally { setIsLoading(false); } };
 
     return (
         <AuthCard title="Create Your Account">

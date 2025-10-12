@@ -1,77 +1,89 @@
 import os
 import logging
+import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
-from pydantic import BaseModel, Field, EmailStr, model_validator
-import httpx
+from pydantic import BaseModel, Field, EmailStr, model_validator, ValidationError
+from httpx import AsyncClient, HTTPStatusError
 from typing import List, Dict, Optional
 from beanie import Document, init_beanie, PydanticObjectId
 import motor.motor_asyncio
-
 from fastapi.middleware.cors import CORSMiddleware
-# --- Database Imports ---
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
-
-# --- Security Imports ---
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta, timezone
 from fastapi.security import OAuth2PasswordBearer
 
-# --- Logging Setup ---
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Environment Setup ---
+# --- Load Environment ---
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
 MONGO_CONNECTION_STRING = os.getenv("MONGO_CONNECTION_STRING")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "a_very_secret_key_that_should_be_in_env")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY") # <--- CHANGE: Removed default for security
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
+# --- FastAPI ---
+app = FastAPI(
+    title="SkillSphere API",
+    description="API for parsing resumes and generating career roadmaps.",
+    version="1.0.0"
+)
 
-# --- Pydantic & Beanie Models ---
+# --- CHANGE: Security enhancement for CORS in production ---
+# For development, "*" is fine. For production, list your frontend domains.
+# e.g., origins = ["https://your-frontend-app.com", "http://localhost:3000"]
+origins = ["*"]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Models ---
 class Experience(BaseModel):
     role: str
-    company: str
-    summary: str
+    company: Optional[str] = None
+    summary: Optional[str] = None
 
     @model_validator(mode='before')
     @classmethod
     def handle_ai_variations(cls, data):
         if isinstance(data, dict):
-            if 'title' in data and 'role' not in data: data['role'] = data['title']
-            if 'description' in data and 'summary' not in data: data['summary'] = data['description']
+            if 'title' in data and 'role' not in data:
+                data['role'] = data['title']
+            if 'description' in data and 'summary' not in data:
+                data['summary'] = data['description']
+            if 'project' in data.get('role', '').lower() and 'company' not in data:
+                data['company'] = 'Personal Project'
         return data
-
 
 class Education(BaseModel):
     degree: str
     university: str
     graduation_year: Optional[int] = None
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def handle_ai_variations(cls, data):
         if isinstance(data, dict):
-            if 'university' not in data:
-                if 'institution' in data:
-                    data['university'] = data['institution']
-                elif 'location' in data:
-                    data['university'] = data['location']
+            if "university" not in data:
+                if "institution" in data:
+                    data["university"] = data["institution"]
+                elif "location" in data:
+                    data["university"] = data["location"]
         return data
-
 
 class ParsedResume(BaseModel):
     skills: Dict[str, List[str]]
     experience: List[Experience]
     education: List[Education]
-
 
 class RoadmapStep(BaseModel):
     step: int
@@ -79,21 +91,17 @@ class RoadmapStep(BaseModel):
     description: str
     resources: List[str]
 
-
 class RoadmapRequest(BaseModel):
-    current_role: str = Field(..., min_length=2)
-    desired_role: str = Field(..., min_length=2)
-    current_skills: List[str] = []
-
+    current_role: str = Field(..., example="Junior Python Developer")
+    desired_role: str = Field(..., example="Senior Machine Learning Engineer")
+    current_skills: List[str] = Field(default=[], example=["Python", "FastAPI", "SQL"])
 
 class RoadmapResponse(BaseModel):
     roadmap: List[RoadmapStep]
 
-
 class SaveRoadmapPayload(BaseModel):
     roadmap_data: RoadmapRequest
     roadmap_response: RoadmapResponse
-
 
 class SavedRoadmap(Document):
     user_email: str = Field(..., index=True)
@@ -105,107 +113,57 @@ class SavedRoadmap(Document):
     class Settings:
         name = "roadmaps"
 
+# --- User Models ---
+class UserAccount(Document):
+    email: EmailStr = Field(..., unique=True)
+    hashed_password: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "users"
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=72)
 
-
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
-
 
 class Token(BaseModel):
     access_token: str
     token_type: str
 
-
 class TokenData(BaseModel):
     email: Optional[str] = None
 
-
 class User(BaseModel):
-    id: str
+    id: PydanticObjectId
     email: EmailStr
 
+    class Config:
+        arbitrary_types_allowed = True
 
 class ResumeParseRequest(BaseModel):
     resume_text: str = Field(..., min_length=50)
 
-
-# --- Startup Event Handler ---
-async def startup_db_clients():
-    # PostgreSQL setup
-    try:
-        migration_file = "database/migrations/001_create_users_table.sql"
-        logger.info("Ensuring PostgreSQL schema is up to date...")
-        if os.path.exists(migration_file):
-            async with postgres_engine.begin() as conn:
-                await conn.execute(text(open(migration_file).read()))
-            logger.info("PostgreSQL schema is ready.")
-        else:
-            logger.warning(f"PostgreSQL migration file not found at {migration_file}. Skipping schema setup.")
-    except Exception as e:
-        logger.error(f"An error occurred during PostgreSQL schema setup: {e}")
-
-    # MongoDB setup
-    try:
-        logger.info("Connecting to MongoDB...")
-        if not MONGO_CONNECTION_STRING:
-            raise ValueError("MONGO_CONNECTION_STRING is not set in .env file")
-        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_CONNECTION_STRING)
-        await init_beanie(database=mongo_client.skillsphere_db, document_models=[SavedRoadmap])
-        logger.info("Successfully connected to MongoDB.")
-    except Exception as e:
-        logger.error(f"An error occurred during MongoDB connection: {e}")
-
-
-# --- FastAPI Application ---
-app = FastAPI(title="SkillSphere API")
-app.add_event_handler("startup", startup_db_clients)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Database Setup ---
-postgres_engine = create_async_engine(DATABASE_URL)
-AsyncPostgresSessionLocal = sessionmaker(postgres_engine, class_=AsyncSession, expire_on_commit=False)
-
-
-# --- Dependencies ---
-async def get_postgres_db():
-    async with AsyncPostgresSessionLocal() as session:
-        yield session
-
-
-# --- Security Functions ---
+# --- Auth Setup ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
-
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_postgres_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -214,169 +172,180 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         email: str = payload.get("sub")
-        if email is None: raise credentials_exception
-        token_data = TokenData(email=email)
+        if email is None:
+            raise credentials_exception
     except JWTError:
         raise credentials_exception
-    user = await get_user_by_email(db, email=token_data.email)
-    if user is None: raise credentials_exception
-    return user
+
+    user = await UserAccount.find_one(UserAccount.email == email)
+    if user is None:
+        raise credentials_exception
+    return User(id=user.id, email=user.email)
+
+# --- Startup Event ---
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting up SkillSphere API...")
+    if not MONGO_CONNECTION_STRING:
+        raise ValueError("FATAL: MONGO_CONNECTION_STRING is not set in .env file.")
+    if not GOOGLE_API_KEY:
+        logger.warning("WARNING: GOOGLE_API_KEY is not set. AI features will fail.")
+    # <--- CHANGE: Critical security check ---
+    if not JWT_SECRET_KEY:
+        raise ValueError("FATAL: JWT_SECRET_KEY is not set. This is a major security risk.")
+
+    try:
+        logger.info("Connecting to MongoDB...")
+        client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_CONNECTION_STRING)
+        await init_beanie(database=client.skillsphere_db, document_models=[UserAccount, SavedRoadmap])
+        logger.info("Successfully connected to MongoDB.")
+    except Exception as e:
+        logger.critical(f"FATAL: Could not connect to MongoDB: {e}")
+        raise
+
+# --- Helper Functions ---
+# <--- CHANGE: Refactored AI call into a reusable helper ---
+async def call_gemini_api(prompt: str, timeout: int = 60) -> str:
+    """Calls the Gemini API with a given prompt and returns the text response."""
+    if not GOOGLE_API_KEY:
+        raise HTTPException(status_code=500, detail="Google API key is not configured on the server.")
+
+# The corrected line
+# The corrected, stable version
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"  
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }
+    try:
+        async with AsyncClient() as client:
+            resp = await client.post(api_url, json=payload, timeout=timeout)
+            resp.raise_for_status()
+        data = resp.json()
+        if not data.get("candidates"):
+            logger.error(f"Invalid AI response structure: {data}")
+            raise HTTPException(status_code=502, detail="AI returned an invalid or empty response.")
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except HTTPStatusError as e:
+        logger.error(f"HTTP error calling Gemini API: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"Error communicating with AI service: {e.response.reason_phrase}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while calling Gemini API: {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 
-# --- Database CRUD Functions ---
-async def get_user_by_email(db: AsyncSession, email: str):
-    result = await db.execute(text("SELECT id, email, hashed_password FROM users WHERE email = :email"),
-                              {"email": email})
-    return result.mappings().first()
-
-
-async def create_user(db: AsyncSession, user: UserCreate):
-    hashed_password = get_password_hash(user.password)
-    query = text(
-        "INSERT INTO users (email, hashed_password) VALUES (:email, :hashed_password) RETURNING id, email, created_at")
-    result = await db.execute(query, {"email": user.email, "hashed_password": hashed_password})
-    await db.commit()
-    return result.mappings().first()
-
-
-# --- API Endpoints ---
-@app.get("/", summary="Health Check")
-async def read_root():
+# --- Routes ---
+@app.get("/", summary="Health Check", tags=["General"])
+async def health_check():
+    """Check if the API is running."""
     return {"status": "SkillSphere API is running!"}
 
+@app.post("/register", summary="Register a new user", status_code=status.HTTP_201_CREATED, tags=["Authentication"])
+async def register(user: UserCreate):
+    """Creates a new user account."""
+    if await UserAccount.find_one(UserAccount.email == user.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    hashed_password = get_password_hash(user.password)
+    new_user = UserAccount(email=user.email, hashed_password=hashed_password)
+    await new_user.insert()
+    return {"message": "User registered successfully", "email": new_user.email}
 
-@app.post("/register", summary="Register a new user")
-async def register(user: UserCreate, db: AsyncSession = Depends(get_postgres_db)):
-    db_user = await get_user_by_email(db, email=user.email)
-    if db_user: raise HTTPException(status_code=400, detail="Email already registered")
-    new_user = await create_user(db, user=user)
-    return {"message": "User created successfully", "user": {"id": new_user['id'], "email": new_user['email']}}
-
-
-@app.post("/login", response_model=Token, summary="User Login")
-async def login(form_data: UserLogin, db: AsyncSession = Depends(get_postgres_db)):
-    user = await get_user_by_email(db, email=form_data.email)
-    if not user or not verify_password(form_data.password, user['hashed_password']):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
-    access_token = create_access_token(data={"sub": user['email']})
+@app.post("/login", response_model=Token, summary="User Login", tags=["Authentication"])
+async def login(form_data: UserLogin):
+    """Authenticates a user and returns a JWT access token."""
+    user = await UserAccount.find_one(UserAccount.email == form_data.email)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    access_token = create_access_token({"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
 
-
-@app.post("/parse-resume", response_model=ParsedResume, summary="Parse a Resume (Requires Auth)")
+@app.post("/parse-resume", response_model=ParsedResume, tags=["AI Tools"])
 async def parse_resume(request: ResumeParseRequest, current_user: User = Depends(get_current_user)):
-    if not GOOGLE_API_KEY:
-        raise HTTPException(status_code=500, detail="Google API key is not configured.")
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GOOGLE_API_KEY}"
-
+    """Parses resume text using AI to extract skills, experience, and education."""
+    # <--- CHANGE: Highly specific prompt to ensure valid JSON output ---
     prompt = f"""
-    You are an expert resume parser for SkillSphere. Analyze the following resume text.
-    Return ONLY a valid JSON object with three keys: "skills", "experience", and "education".
-    - "skills": An object where keys are skill categories (e.g., "Programming Languages", "Tools") and values are arrays of strings.
-    - "experience": An array of objects, each with "role", "company", and "summary".
-    - "education": An array of objects, each with "degree", "university", and "graduation_year" (an integer, or null if not found).
-    Do not include any other text or markdown.
+    You are an expert resume parser. Your sole task is to analyze the following resume text and convert it into a valid JSON object.
+    The JSON object MUST have three top-level keys: "skills", "experience", and "education".
+
+    1.  The "skills" key must map to an object where each key is a skill category (e.g., "Programming Languages", "Databases", "Tools") and the value is a list of skill strings.
+    2.  The "experience" key must map to a list of objects. Each object must have "role", "company", and "summary" keys.
+    3.  The "education" key must map to a list of objects. Each object must have "degree", "university", and "graduation_year" keys.
+
+    Do not include any introductory text, explanations, or markdown formatting. The output must be only the raw JSON.
 
     Resume Text:
     ---
     {request.resume_text}
     ---
     """
+    parsed_text = await call_gemini_api(prompt)
 
-    payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "generationConfig": {"responseMimeType": "application/json"}}
+    # <--- CHANGE: Robust error handling for validation ---
+    try:
+        return ParsedResume.model_validate_json(parsed_text)
+    except (ValidationError, json.JSONDecodeError) as e:
+        logger.error(f"Pydantic validation failed for resume parse: {e}\nAI Response was:\n{parsed_text}")
+        raise HTTPException(status_code=422, detail="The AI returned data in an unexpected format. Please try again.")
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(api_url, json=payload, timeout=45.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("candidates"):
-                parsed_text = result["candidates"][0]["content"]["parts"][0]["text"]
-                return ParsedResume.model_validate_json(parsed_text)
-            else:
-                raise HTTPException(status_code=500, detail="AI service returned an invalid response.")
-        except Exception as e:
-            logger.error(f"Error during resume parsing: {e}")
-            raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-
-
-@app.post("/generate-roadmap", response_model=RoadmapResponse, summary="Generate Career Roadmap (Requires Auth)")
+@app.post("/generate-roadmap", response_model=RoadmapResponse, tags=["AI Tools"])
 async def generate_roadmap(request: RoadmapRequest, current_user: User = Depends(get_current_user)):
-    if not GOOGLE_API_KEY:
-        raise HTTPException(status_code=500, detail="Google API key is not configured.")
-
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GOOGLE_API_KEY}"
-    current_skills_str = ", ".join(request.current_skills) if request.current_skills else "None"
-
+    """Generates a career roadmap using AI based on current and desired roles."""
+    # <--- CHANGE: More structured prompt for roadmap generation ---
     prompt = f"""
-    Act as an expert career coach for the SkillSphere platform. A user wants to transition from
-    their current role of '{request.current_role}' to a new role of '{request.desired_role}'.
-    The user already possesses the following skills: {current_skills_str}.
+    Create a detailed, step-by-step learning roadmap for a professional aiming to transition from a "{request.current_role}" to a "{request.desired_role}".
+    The user's current skills are: {', '.join(request.current_skills) if request.current_skills else 'None listed'}.
 
-    Your task is to generate a concise, step-by-step learning roadmap.
+    Your response must be a single, valid JSON object with a single top-level key: "roadmap".
+    The "roadmap" key must map to a list of step objects.
+    Each step object in the list must contain the following keys:
+    - "step": An integer representing the order of the step (starting from 1).
+    - "title": A concise string title for the step.
+    - "description": A string explaining what to learn or do in this step.
+    - "resources": A list of strings, where each string is a suggested resource (e.g., a book title, online course, or technology to practice).
 
-    IMPORTANT: The output MUST be a valid JSON object and NOTHING else. Do not include any introductory text, explanations, or markdown formatting like ```json.
-
-    The JSON object must have a single key "roadmap", which is an array of objects.
-    Each object in the array represents a step and must have these four keys:
-    1. "step": (Integer) The step number, starting from 1.
-    2. "title": (String) A short, clear title for the step.
-    3. "description": (String) A 1-2 sentence explanation of why this step is important, focusing on filling skill gaps.
-    4. "resources": (Array of Strings) A list of 2-3 specific, high-quality learning resources.
-
-    Create a roadmap with 5 to 7 logical steps. Do not suggest skills the user already has.
+    Generate a practical and logical roadmap. The output must be only the raw JSON.
     """
+    parsed_text = await call_gemini_api(prompt)
 
-    payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "generationConfig": {"responseMimeType": "application/json"}}
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(api_url, json=payload, timeout=60.0)
-            response.raise_for_status()
-            result = response.json()
-            if result.get("candidates"):
-                parsed_text = result["candidates"][0]["content"]["parts"][0]["text"]
-                return RoadmapResponse.model_validate_json(parsed_text)
-            else:
-                raise HTTPException(status_code=500, detail="AI service returned an invalid response for roadmap.")
-        except Exception as e:
-            logger.error(f"Error during roadmap generation: {e}")
-            raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+    # <--- CHANGE: Robust error handling for validation ---
+    try:
+        return RoadmapResponse.model_validate_json(parsed_text)
+    except (ValidationError, json.JSONDecodeError) as e:
+        logger.error(f"Pydantic validation failed for roadmap generation: {e}\nAI Response was:\n{parsed_text}")
+        raise HTTPException(status_code=422, detail="The AI returned data in an unexpected format. Please try again.")
 
 
-@app.post("/roadmaps", status_code=status.HTTP_201_CREATED, summary="Save a Generated Roadmap (Requires Auth)")
+@app.post("/roadmaps", summary="Save a generated roadmap", status_code=status.HTTP_201_CREATED, tags=["Roadmaps"])
 async def save_roadmap(payload: SaveRoadmapPayload, current_user: User = Depends(get_current_user)):
-    saved_roadmap = SavedRoadmap(
+    """Saves a user's generated roadmap to their profile."""
+    roadmap = SavedRoadmap(
         user_email=current_user.email,
         current_role=payload.roadmap_data.current_role,
         desired_role=payload.roadmap_data.desired_role,
-        roadmap=payload.roadmap_response.roadmap
+        roadmap=payload.roadmap_response.roadmap,
     )
-    await saved_roadmap.insert()
-    return {"message": "Roadmap saved successfully!", "roadmap_id": str(saved_roadmap.id)}
+    await roadmap.insert()
+    return {"message": "Roadmap saved successfully", "roadmap_id": str(roadmap.id)}
 
-
-@app.get("/my-roadmaps", response_model=List[SavedRoadmap], summary="Get All Saved Roadmaps for a User (Requires Auth)")
+@app.get("/my-roadmaps", response_model=List[SavedRoadmap], tags=["Roadmaps"])
 async def get_my_roadmaps(current_user: User = Depends(get_current_user)):
-    roadmaps = await SavedRoadmap.find(SavedRoadmap.user_email == current_user.email).to_list()
-    return roadmaps
+    """Retrieves all roadmaps saved by the current user."""
+    return await SavedRoadmap.find(SavedRoadmap.user_email == current_user.email).to_list()
 
-
-# --- NEW DELETE ENDPOINT ---
-@app.delete("/roadmaps/{roadmap_id}", status_code=status.HTTP_204_NO_CONTENT,
-            summary="Delete a Saved Roadmap (Requires Auth)")
+@app.delete("/roadmaps/{roadmap_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Roadmaps"])
 async def delete_roadmap(roadmap_id: PydanticObjectId, current_user: User = Depends(get_current_user)):
-    """
-    Deletes a specific roadmap by its ID, ensuring it belongs to the current user.
-    """
-    roadmap_to_delete = await SavedRoadmap.get(roadmap_id)
-    if not roadmap_to_delete:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Roadmap not found")
+    """Deletes a specific roadmap saved by the current user."""
+    roadmap = await SavedRoadmap.get(roadmap_id)
+    if not roadmap:
+        raise HTTPException(status_code=404, detail="Roadmap not found")
+    if roadmap.user_email != current_user.email:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this roadmap")
+    await roadmap.delete()
+    return None
 
-    if roadmap_to_delete.user_email != current_user.email:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this roadmap")
-
-    await roadmap_to_delete.delete()
-    return None  # Return no content on successful deletion
-
+# --- Run App ---
+if __name__ == "__main__":
+    import uvicorn
+    # Note: The port is set to 8001 as in the original snippet.
+    # The app object should be specified as "main:app" if the file is named main.py
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
