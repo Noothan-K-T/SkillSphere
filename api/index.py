@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, EmailStr, model_validator, ValidationErro
 from httpx import AsyncClient, HTTPStatusError
 from typing import List, Dict, Optional
 from beanie import Document, init_beanie, PydanticObjectId
-import motor.motor_asyncio
+from pymongo import AsyncMongoClient
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -61,7 +61,7 @@ if not MONGO_CONNECTION_STRING:
     logger.error("FATAL: MONGO_CONNECTION_STRING is not set.")
     raise ValueError("MONGO_CONNECTION_STRING environment variable not set.")
 
-client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_CONNECTION_STRING)
+mongo_client = AsyncMongoClient(MONGO_CONNECTION_STRING)
 
 # --- Models ---
 class Experience(BaseModel):
@@ -165,7 +165,7 @@ async def init_db():
     """Initialize Beanie ODM on application startup."""
     try:
         await init_beanie(
-            database=client.skillsphere_db,
+            database=mongo_client.skillsphere_db,
             document_models=[UserAccount, SavedRoadmap]
         )
     except Exception as e:

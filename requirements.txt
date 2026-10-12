@@ -4,8 +4,8 @@ httpx
 python-dotenv
 SQLAlchemy
 psycopg[binary]
-beanie
-motor
+beanie>=2.0.0,<3.0.0
+pymongo[srv]>=4.11,<5.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.0
 python-jose[cryptography]
