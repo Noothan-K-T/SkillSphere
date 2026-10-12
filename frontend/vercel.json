@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://skillsphere-tb86.onrender.com/api/$1"
+      "destination": "https://skillsphere-app-3ek7.onrender.com/api/$1"
     },
     {
       "source": "/(.*)",
