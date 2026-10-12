@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
-import pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // --- Animated SVG Icons ---
 const RoadmapIcon = () => (
@@ -290,8 +286,13 @@ const RoadmapGenerator = ({ token }) => {
       let text = '';
       const extension = file.name.toLowerCase();
       if (extension.endsWith('.pdf')) {
+        const [{ GlobalWorkerOptions, getDocument }, { default: pdfjsWorker }] = await Promise.all([
+          import('pdfjs-dist/legacy/build/pdf'),
+          import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
+        ]);
+        GlobalWorkerOptions.workerSrc = pdfjsWorker;
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pdf = await getDocument({ data: arrayBuffer }).promise;
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const content = await page.getTextContent();
