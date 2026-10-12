@@ -19,4 +19,4 @@ EXPOSE 8000
 
 # Define the command to run your app using uvicorn
 # This will be executed when the container starts
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000}"]

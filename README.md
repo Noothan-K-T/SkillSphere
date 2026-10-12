@@ -73,7 +73,7 @@ Create a .env file and fill in your secret keys (see .env.example).
 
 Start the server:
 
-python -m uvicorn main:app --reload
+python -m uvicorn api.index:app --reload --port 8000
 
 The backend will be running at http://127.0.0.1:8000.
 

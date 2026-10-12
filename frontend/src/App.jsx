@@ -262,7 +262,7 @@ const Navbar = ({ page, setPage, token, setToken }) => {
 };
 
 // --- Roadmap Generator (Unified Dashboard) ---
-const RoadmapGenerator = ({ token, setPage }) => {
+const RoadmapGenerator = ({ token }) => {
   const [currentRole, setCurrentRole] = useState('');
   const [desiredRole, setDesiredRole] = useState('');
   const [roadmap, setRoadmap] = useState(null);
@@ -309,7 +309,7 @@ const RoadmapGenerator = ({ token, setPage }) => {
         text = await file.text();
       }
 
-      const res = await fetch('http://127.0.0.1:8001/api/parse-resume', {
+      const res = await fetch('/api/parse-resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ resume_text: text })
@@ -336,7 +336,7 @@ const RoadmapGenerator = ({ token, setPage }) => {
     setIsParsing(true);
     setError('');
     try {
-      const res = await fetch('http://127.0.0.1:8001/api/parse-resume', {
+      const res = await fetch('/api/parse-resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ resume_text: resumeText })
@@ -364,7 +364,7 @@ const RoadmapGenerator = ({ token, setPage }) => {
     const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : [];
 
     try {
-      const res = await fetch('http://127.0.0.1:8001/api/generate-roadmap', {
+      const res = await fetch('/api/generate-roadmap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
@@ -392,7 +392,7 @@ const RoadmapGenerator = ({ token, setPage }) => {
     setSaveButtonText('Saving...');
     const currentSkills = parsedData?.skills ? Object.values(parsedData.skills).flat() : [];
     try {
-      const res = await fetch('http://127.0.0.1:8001/api/roadmaps', {
+      const res = await fetch('/api/roadmaps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
@@ -672,7 +672,7 @@ const MyRoadmapsPage = ({ token }) => {
       }
 
       try {
-        const res = await fetch('http://127.0.0.1:8001/api/my-roadmaps', {
+        const res = await fetch('/api/my-roadmaps', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -698,7 +698,7 @@ const MyRoadmapsPage = ({ token }) => {
     setSavedRoadmaps((current) => current.filter((r) => (r.id || r._id) !== roadmapId));
 
     try {
-      const res = await fetch(`http://127.0.0.1:8001/api/roadmaps/${roadmapId}`, {
+      const res = await fetch(`/api/roadmaps/${roadmapId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -862,7 +862,7 @@ const LoginPage = ({ setPage, setToken }) => {
     setIsLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8001/api/login', {
+      const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -948,7 +948,7 @@ const RegisterPage = ({ setPage }) => {
     setIsLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:8001/api/register', {
+      const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -1052,7 +1052,7 @@ export default function App() {
         return <MyRoadmapsPage token={token} />;
       case 'home':
       default:
-        return <RoadmapGenerator token={token} setPage={setPage} />;
+        return <RoadmapGenerator token={token} />;
     }
   };
 

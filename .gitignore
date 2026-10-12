@@ -26,15 +26,27 @@ pycache/
 --- Node/React Frontend ---
 Node modules - VERY IMPORTANT for repository size
 my-skillsphere-app/node_modules/
+frontend/node_modules/
+node_modules/
 
 Build output
 my-skillsphere-app/dist/
 my-skillsphere-app/build/
+frontend/dist/
+frontend/build/
+dist/
+build/
 
 Log files
 my-skillsphere-app/npm-debug.log*
 my-skillsphere-app/yarn-debug.log*
 my-skillsphere-app/yarn-error.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+Python bytecode
+__pycache__/
 
 --- Docker ---
 docker-compose.yml
